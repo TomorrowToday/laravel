@@ -218,21 +218,11 @@ abstract class Model {
 	{
 		$model = new static(array(), true);
 
-		if (static::$timestamps) $attributes['updated_at'] = new \DateTime;
+		$model->fill($attributes);
 
-		return $model->query()->where($model->key(), '=', $id)->update($attributes);
-	}
+		if (static::$timestamps) $model->timestamp();
 
-	/**
-	 * Find a model by its primary key.
-	 *
-	 * @param  string  $id
-	 * @param  array   $columns
-	 * @return Model
-	 */
-	public function _find($id, $columns = array('*'))
-	{
-		return $this->query()->where(static::$key, '=', $id)->first($columns);
+		return $model->query()->where($model->key(), '=', $id)->update($model->attributes);
 	}
 
 	/**
@@ -253,27 +243,7 @@ abstract class Model {
 	 */
 	public function _with($includes)
 	{
-		$includes = (array) $includes;
-
-		$all_includes = array();
-
-		foreach($includes as $include)
-		{
-			$nested = explode('.', $include);
-
-			$inc = array();
-
-			foreach($nested as $relation)
-			{
-				$inc[] = $relation;
-
-				$all_includes[] = implode('.', $inc);
-			}
-
-		}
-
-		//remove duplicates and reset the array keys.
-		$this->includes = array_values(array_unique($all_includes));
+		$this->includes = (array) $includes;
 
 		return $this;
 	}
@@ -351,7 +321,7 @@ abstract class Model {
 	 * @param  string        $table
 	 * @param  string        $foreign
 	 * @param  string        $other
-	 * @return Relationship
+	 * @return Has_Many_And_Belongs_To
 	 */
 	public function has_many_and_belongs_to($model, $table = null, $foreign = null, $other = null)
 	{
@@ -463,7 +433,7 @@ abstract class Model {
 	 *
 	 * @return void
 	 */
-	protected function timestamp()
+	public function timestamp()
 	{
 		$this->updated_at = new \DateTime;
 
@@ -471,11 +441,22 @@ abstract class Model {
 	}
 
 	/**
+	 *Updates the timestamp on the model and immediately saves it.
+	 *
+	 * @return void
+	 */
+	public function touch()
+	{
+		$this->timestamp();
+		$this->save();
+	}
+
+	/**
 	 * Get a new fluent query builder instance for the model.
 	 *
 	 * @return Query
 	 */
-	protected function query()
+	protected function _query()
 	{
 		return new Query($this);
 	}
@@ -500,7 +481,7 @@ abstract class Model {
 	 */
 	public function changed($attribute)
 	{
-		return array_get($this->attributes, $attribute) !== array_get($this->original, $attribute);
+		return array_get($this->attributes, $attribute) != array_get($this->original, $attribute);
 	}
 
 	/**
@@ -536,7 +517,7 @@ abstract class Model {
 
 		foreach ($this->attributes as $key => $value)
 		{
-			if ( ! isset($this->original[$key]) or $value !== $this->original[$key])
+			if ( ! array_key_exists($key, $this->original) or $value != $this->original[$key])
 			{
 				$dirty[$key] = $value;
 			}
@@ -552,7 +533,7 @@ abstract class Model {
 	 */
 	public function get_key()
 	{
-		return $this->get_attribute(static::$key);
+		return array_get($this->attributes, static::$key);
 	}
 
 	/**
@@ -622,6 +603,9 @@ abstract class Model {
 
 		foreach ($this->relationships as $name => $models)
 		{
+			// Relationships can be marked as "hidden", too.
+			if (in_array($name, static::$hidden)) continue;
+
 			// If the relationship is not a "to-many" relationship, we can just
 			// to_array the related model and add it as an attribute to the
 			// array of existing regular attributes we gathered.
@@ -635,6 +619,8 @@ abstract class Model {
 			// to_array method, keying them both by name and ID.
 			elseif (is_array($models))
 			{
+				$attributes[$name] = array();
+
 				foreach ($models as $id => $model)
 				{
 					$attributes[$name][$id] = $model->to_array();
@@ -725,10 +711,10 @@ abstract class Model {
 	{
 		foreach (array('attributes', 'relationships') as $source)
 		{
-			if (array_key_exists($key, $this->$source)) return true;
+			if (array_key_exists($key, $this->{$source})) return ! empty($this->{$source}[$key]);
 		}
-		
-		if (method_exists($this, $key)) return true;
+
+		return false;
 	}
 
 	/**
@@ -741,7 +727,7 @@ abstract class Model {
 	{
 		foreach (array('attributes', 'relationships') as $source)
 		{
-			unset($this->$source[$key]);
+			unset($this->{$source}[$key]);
 		}
 	}
 
@@ -764,7 +750,7 @@ abstract class Model {
 			return static::$$method;
 		}
 
-		$underscored = array('with', 'find');
+		$underscored = array('with', 'query');
 
 		// Some methods need to be accessed both staticly and non-staticly so we'll
 		// keep underscored methods of those methods and intercept calls to them
